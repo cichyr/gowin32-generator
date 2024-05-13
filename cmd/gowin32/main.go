@@ -1,22 +1,30 @@
 package main
 
 import (
-	"debug/pe"
 	"fmt"
+	"gowin32/internal/metadata"
 	"runtime"
 	"syscall"
 	"unsafe"
-
-	"github.com/microsoft/go-winmd"
 )
 
-func check(e error) {
-	if e != nil {
-		panic(e)
-	}
-}
-
 func main() {
+	/*
+		ToDo: Params to handle:
+		- EmitSingleFile (default -> false)
+		- PackageName    (default -> PInvoke)
+		- FileName       (default -> test_input.txt)
+		- MetadataPath   (default -> Windows.Win32.winmd)
+	*/
+
+	inputFile := []string{
+		"GetCursorPos",
+	}
+	metadataReader := metadata.NewReader("Windows.Win32.winmd")
+	methodsToGenerate := make([]metadata.Method, len(inputFile))
+	for i, entry := range inputFile {
+		methodsToGenerate[i] = metadataReader.GetMethod(entry) // ToDo: should be more generic
+	}
 
 	// metadata := loadWinMdFile()
 	// method := codeStructure.GetMethod(metadata, "GetCursorPos")
@@ -79,18 +87,6 @@ func main() {
 	runtime.KeepAlive(r1)
 	runtime.KeepAlive(r2)
 	fmt.Printf("X: %d\nY: %d", point.X, point.Y)
-}
-
-//lint:ignore U1000 Ignore unused function temporarily for debugging
-func loadWinMdFile() winmd.Metadata {
-	peFile, error := pe.Open("Windows.Win32.winmd")
-	check(error)
-	defer peFile.Close()
-
-	winmdMetadata, error := winmd.New(peFile)
-	check(error)
-
-	return *winmdMetadata
 }
 
 type POINT struct {
