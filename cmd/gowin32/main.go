@@ -19,12 +19,27 @@ func main() {
 
 	inputFile := []string{
 		"GetCursorPos",
+		"IPersistFile",
 	}
 	metadataReader := metadata.NewReader("Windows.Win32.winmd")
-	methodsToGenerate := make([]metadata.Method, len(inputFile))
-	for i, entry := range inputFile {
-		methodsToGenerate[i] = metadataReader.GetMethod(entry) // ToDo: should be more generic
+	methodsToGenerate := make([]metadata.Method, 0)
+	typesToGenerate := make([]metadata.Type, 0)
+	for _, entry := range inputFile {
+		methodElement, found := metadataReader.TryGetMethod(entry)
+		if found {
+			methodsToGenerate = append(methodsToGenerate, methodElement)
+			continue
+		}
+
+		typeElement, found := metadataReader.TryGetType(entry)
+		if found {
+			typesToGenerate = append(typesToGenerate, typeElement)
+			continue
+		}
 	}
+
+	runtime.KeepAlive(typesToGenerate)
+	runtime.KeepAlive(methodsToGenerate)
 
 	// metadata := loadWinMdFile()
 	// method := codeStructure.GetMethod(metadata, "GetCursorPos")

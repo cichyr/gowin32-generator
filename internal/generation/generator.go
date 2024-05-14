@@ -93,7 +93,7 @@ func (generator *Generator) GenerateMethods(statement *jen.Statement) {
 
 		statement.
 			BlockFunc(func(g *jen.Group) {
-				g.Id("dll").Op(":=").Qual("syscall", "NewLazyDLL").Call(jen.Lit("user32.dll")) // ToDo: use correct DLL
+				g.Id("dll").Op(":=").Qual("syscall", "NewLazyDLL").Call(jen.Lit(method.DllImport))
 				g.Id("proc").Op(":=").Qual("dll", "NewProc").Call(jen.Lit(method.Name))
 				for _, param := range method.Params {
 					g.Id(fmt.Sprintf("%sPtr", param.Name)).Op(":=").Qual("unsafe", "Pointer").Call(jen.Id(param.Name))

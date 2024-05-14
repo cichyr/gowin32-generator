@@ -5,6 +5,7 @@ import (
 	"debug/pe"
 	"fmt"
 	"gowin32/internal"
+	"runtime"
 
 	"github.com/microsoft/go-winmd"
 	"github.com/microsoft/go-winmd/flags"
@@ -37,7 +38,7 @@ var builtInTypeDefs map[string]string = map[string]string{
 }
 
 // Generates a new metadata reader based WinMd file under given path
-func (reader *WinMdReader) NewReader(winMdPath string) WinMdReader {
+func NewReader(winMdPath string) WinMdReader {
 	peFile, err := pe.Open(winMdPath)
 	internal.PanicOnError(err)
 	defer peFile.Close()
@@ -50,6 +51,7 @@ func (reader *WinMdReader) NewReader(winMdPath string) WinMdReader {
 	}
 }
 
+// Tries to get method with given name
 func (reader *WinMdReader) TryGetMethod(name string) (element Method, found bool) {
 	methodDef := reader.tryGetMethodDef(name)
 	if methodDef == nil {
@@ -59,7 +61,14 @@ func (reader *WinMdReader) TryGetMethod(name string) (element Method, found bool
 	return reader.getMethod(methodDef), true
 }
 
+// Tries to get type with given name
 func (reader *WinMdReader) TryGetType(name string) (element Type, found bool) {
+	typeDef := reader.tryGetTypeDef(name)
+	if typeDef == nil {
+		return Type{}, false
+	}
+
+	// return reader.getMethod(methodDef), true
 	return Type{}, false
 }
 
@@ -144,14 +153,48 @@ func (reader *WinMdReader) getTypeDef(sigType winmd.SigType) (winmd.TypeDef, err
 	return *typeDef, nil
 }
 
+func (reader *WinMdReader) tryGetTypeDef(name string) *winmd.TypeDef {
+	table := reader.metadata.Tables.TypeDef
+	for idx := uint32(0); idx < table.Len; idx++ {
+		typeDef, err := table.Record(winmd.Index(idx))
+		internal.PanicOnError(err) // It returns an error only when creating return value and for out of scope file
+		if typeDef.Name.String() == name {
+			return typeDef
+		}
+	}
+
+	return nil
+}
+
+// Gets the name of the *.dll file that implements given member.
+// ToDo: Reconsider returning `found bool`.
+func (reader *WinMdReader) getImportingDll(memberName string) (importingDll string, found bool) {
+	for i := uint32(0); i < reader.metadata.Tables.ImplMap.Len; i++ {
+		implMap, err := reader.metadata.Tables.ImplMap.Record(winmd.Index(i))
+		internal.PanicOnError(err)
+		if implMap.ImportName.String() == memberName {
+			dllImport, err := reader.metadata.Tables.ModuleRef.Record(implMap.ImportScope)
+			internal.PanicOnError(err)
+			return dllImport.Name.String(), true
+		}
+	}
+
+	return "", false
+}
+
 func (reader *WinMdReader) getMethod(methodDef *winmd.MethodDef) Method {
 	methodSignature, err := reader.metadata.MethodDefSignature(methodDef.Signature)
 	internal.PanicOnError(err)
+
 	returnType, err := reader.getType(methodSignature.RetType.Type)
 	internal.PanicOnError(err)
+
+	dllName, _ := reader.getImportingDll(methodDef.Name.String())
 	method := Method{
 		Name:       methodDef.Name.String(),
-		ReturnType: returnType}
+		ReturnType: returnType,
+		DllImport:  dllName,
+	}
 
 	methodParamListValues := make([]winmd.Param, 0)
 	for idx := uint32(methodDef.ParamList.Start + 1); idx < uint32(methodDef.ParamList.End); idx++ {
@@ -177,14 +220,40 @@ func (reader *WinMdReader) getMethod(methodDef *winmd.MethodDef) Method {
 	return method
 }
 
+// ToDo: Consider inlining it
 func (reader *WinMdReader) tryGetMethodDef(name string) *winmd.MethodDef {
-	for idx := uint32(0); idx < reader.metadata.Tables.MethodDef.Len; idx++ {
-		methodDef, err := reader.metadata.Tables.MethodDef.Record(winmd.Index(idx))
+	return findElementInTable(
+		reader.metadata.Tables.MethodDef,
+		func(methodDef *winmd.MethodDef) bool { return methodDef.Name.String() == name })
+
+	// table := reader.metadata.Tables.MethodDef
+	// for idx := uint32(0); idx < table.Len; idx++ {
+	// 	methodDef, err := table.Record(winmd.Index(idx))
+	// 	internal.PanicOnError(err) // It returns an error only when creating return value and for out of scope file
+	// 	if methodDef.Name.String() == name {
+	// 		return methodDef
+	// 	}
+	// }
+
+	// return nil
+}
+
+//lint:ignore U1000 In development
+func iterateOverTable[T any, TP winmd.Record[T]](table winmd.Table[T, TP], action func(TP)) {
+	for idx := uint32(0); idx < table.Len; idx++ {
+		element, err := table.Record(winmd.Index(idx))
 		internal.PanicOnError(err) // It returns an error only when creating return value and for out of scope file
-		if methodDef.Name.String() == name {
-			return methodDef
+		action(element)
+	}
+}
+
+// Finds element in given table and returns it. If element is not found then `nil` is returned.
+func findElementInTable[T any, TP winmd.Record[T]](table winmd.Table[T, TP], action func(TP) bool) TP {
+	for idx := uint32(0); idx < table.Len; idx++ {
+		element, err := table.Record(winmd.Index(idx))
+		internal.PanicOnError(err) // It returns an error only when creating return value and for out of scope file
+		if action(element) {
+			return element
 		}
 	}
-
-	return nil
 }

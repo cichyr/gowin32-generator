@@ -17,6 +17,7 @@ type Method struct {
 	Name       string
 	Params     []Parameter
 	ReturnType Type
+	DllImport  string
 }
 
 type Parameter struct {
