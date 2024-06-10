@@ -1,14 +1,33 @@
+// Some text
 package main
 
 import (
+	"bufio"
+	"errors"
+	"flag"
 	"fmt"
+	"gowin32/internal"
+	"gowin32/internal/generation"
 	"gowin32/internal/metadata"
+	"io"
+	"io/fs"
+	"log"
+	"os"
 	"runtime"
-	"syscall"
-	"unsafe"
+	"strings"
 )
 
 func main() {
+	var metadataFilePath = flag.String("metadataPath", "Windows.Win32.winmd", "The path to the metadata file to read. Default: Windows.Win32.winmd")
+	var inputFilePath = flag.String("input", "", "The path to the file containing information what types and/or methods should be read from the metadata file.")
+	var packageName = flag.String("packageName", "PInvoke", "The name of the package with generated code. Default: PInvoke")
+	var outputPath = flag.String("outputPath", "./output/", "The path where all generated files will be placed.")
+	var forceClean = flag.Bool("forceCleanOutput", false, "If given forces cleaning output file before generation.")
+	flag.Usage = func() {
+		fmt.Println("App that helps generate PInvoke calls.")
+		flag.PrintDefaults()
+	}
+
 	/*
 		ToDo: Params to handle:
 		- EmitSingleFile (default -> false)
@@ -17,99 +36,84 @@ func main() {
 		- MetadataPath   (default -> Windows.Win32.winmd)
 	*/
 
-	inputFile := []string{
-		"GetCursorPos",
-		"IPersistFile",
+	flag.Parse()
+
+	if _, err := os.Stat(*metadataFilePath); errors.Is(err, os.ErrNotExist) {
+		*metadataFilePath = "Windows.Win32.winmd"
+		metadata.DownloadMetadata(*metadataFilePath)
 	}
+
+	if *inputFilePath == "" {
+		log.Fatal("Input file path is missing!")
+	} else if _, err := os.Stat(*inputFilePath); errors.Is(err, os.ErrNotExist) {
+		log.Fatal("Input file does not exist!")
+	}
+
+	err := os.Mkdir(*outputPath, os.ModePerm)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		panic(err)
+	}
+
+	err = ClearDirectoryIfNotEmpty(*outputPath, *forceClean)
+	internal.PanicOnError(err)
+
 	metadataReader := metadata.NewReader("Windows.Win32.winmd")
-	methodsToGenerate := make([]metadata.Method, 0)
-	typesToGenerate := make([]metadata.Type, 0)
-	for _, entry := range inputFile {
-		methodElement, found := metadataReader.TryGetMethod(entry)
+	generator := generation.NewGenerator(*packageName, *outputPath)
+
+	file, err := os.Open(*inputFilePath)
+	internal.PanicOnError(err)
+	fileScanner := bufio.NewScanner(file)
+
+	for fileScanner.Scan() {
+		if err := fileScanner.Err(); err != nil {
+			log.Fatal(err)
+		}
+
+		methodElement, found := metadataReader.TryGetMethod(fileScanner.Text())
 		if found {
-			methodsToGenerate = append(methodsToGenerate, methodElement)
+			generator.RegisterMethod(methodElement)
 			continue
 		}
 
-		typeElement, found := metadataReader.TryGetType(entry)
+		typeElement, found := metadataReader.TryGetType(fileScanner.Text())
 		if found {
-			typesToGenerate = append(typesToGenerate, typeElement)
+			generator.RegisterType(typeElement)
 			continue
 		}
 	}
 
-	runtime.KeepAlive(typesToGenerate)
-	runtime.KeepAlive(methodsToGenerate)
+	generator.Generate(*outputPath)
 
-	// metadata := loadWinMdFile()
-	// method := codeStructure.GetMethod(metadata, "GetCursorPos")
-	// typesToGenerate := make([]codeStructure.Type, 1)
-	// typesToGenerate[0] = method.ReturnType
-	// for _, param := range method.Params {
-	// 	if !param.Type.IsBuiltIn {
-	// 		typesToGenerate = append(typesToGenerate, param.Type)
-	// 	}
-	// }
-
-	// file := jen.Line()
-
-	// for _, typeToGenerate := range typesToGenerate {
-	// 	file.Type().Id(typeToGenerate.Name).StructFunc(func(g *jen.Group) {
-	// 		for _, prop := range typeToGenerate.Properties {
-	// 			g.Id(prop.Name).Id(prop.Type.Name)
-	// 		}
-	// 	}).Line()
-	// }
-
-	// file.Line().Func().Id(method.Name).ParamsFunc(func(g *jen.Group) {
-	// 	for _, param := range method.Params {
-	// 		if param.IsPointer {
-	// 			g.Id(param.Name).Add(jen.Op("*")).Qual("", param.Type.Name)
-	// 		} else {
-	// 			g.Id(param.Name).Id(param.Type.Name)
-	// 		}
-	// 	}
-	// })
-	// if method.ReturnType.IsPointer {
-	// 	file.Add(jen.Op("*")).Id(method.ReturnType.Name)
-	// } else {
-	// 	file.Id(method.ReturnType.Name)
-	// }
-	// file.BlockFunc(func(g *jen.Group) {
-	// 	g.Id("dll").Op(":=").Qual("syscall", "NewLazyDLL").Call(jen.Lit("user32.dll"))
-	// 	g.Id("proc").Op(":=").Qual("dll", "NewProc").Call(jen.Lit(method.Name))
-	// 	for _, param := range method.Params {
-	// 		g.Id(fmt.Sprintf("%sPtr", param.Name)).Op(":=").Qual("unsafe", "Pointer").Call(jen.Id(param.Name))
-	// 	}
-	// 	g.List(jen.Id("r1"), jen.Id("_"), jen.Id("_")).Op(":=").Qual("proc", "Call").CallFunc(func(g *jen.Group) {
-	// 		for _, param := range method.Params {
-	// 			g.Id("uintptr").Call(jen.Id(fmt.Sprintf("%sPtr", param.Name)))
-	// 		}
-	// 	})
-	// 	g.Return().Id("r1")
-	// })
-
-	// fmt.Printf("%#v", file)
-	// runtime.KeepAlive(file)
-	// runtime.KeepAlive(loadWinMdFile())
-
-	user32 := syscall.NewLazyDLL("user32.dll")
-	getCursorPos := user32.NewProc("GetCursorPos")
-	point := POINT{}
-	lpPoint := unsafe.Pointer(&point)
-	r1, r2, error := getCursorPos.Call(uintptr(lpPoint))
-	runtime.KeepAlive(error)
-	runtime.KeepAlive(r1)
-	runtime.KeepAlive(r2)
-	fmt.Printf("X: %d\nY: %d", point.X, point.Y)
+	runtime.KeepAlive(packageName)
 }
 
-type POINT struct {
-	X int32
-	Y int32
-}
+func ClearDirectoryIfNotEmpty(path string, silent bool) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
 
-// [SupportedOSPlatform("windows5.0")]
-// [Documentation("https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getcursorpos")]
-// [DllImport("USER32.dll", SetLastError = true, PreserveSig = false)]
-// public static extern BOOL GetCursorPos([Out] POINT* lpPoint);
+	_, err = directory.Readdirnames(1)
+	if err == io.EOF {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	var response string
+	if !silent {
+		fmt.Print("Output directory is not empty. Continuation will result in removing all output file. Proceed? [Y/n]")
+		fmt.Scan(&response)
+		if strings.ToUpper(response) != "Y" {
+			log.Fatal("Explicit agreement was not given. Exiting.")
+		}
+	}
+
+	fmt.Println("Cleaning output directory.")
+	// return os.RemoveAll(path) - Suppressing error for now
+	os.RemoveAll(path)
+	return nil
+}

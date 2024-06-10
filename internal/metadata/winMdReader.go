@@ -5,7 +5,7 @@ import (
 	"debug/pe"
 	"fmt"
 	"gowin32/internal"
-	"runtime"
+	"strings"
 
 	"github.com/microsoft/go-winmd"
 	"github.com/microsoft/go-winmd/flags"
@@ -15,7 +15,7 @@ type WinMdReader struct {
 	metadata winmd.Metadata
 }
 
-// The map of basic C types to Go equivalents
+// The map of basic C types to Go equivalents based on §II.23.1.16 definitions
 var builtInElementTypes map[flags.ElementType]string = map[flags.ElementType]string{
 	flags.ElementType_BOOLEAN: "bool",
 	flags.ElementType_CHAR:    "rune",
@@ -30,9 +30,14 @@ var builtInElementTypes map[flags.ElementType]string = map[flags.ElementType]str
 	flags.ElementType_U8:      "uint64",
 	flags.ElementType_R4:      "float32",
 	flags.ElementType_R8:      "float64",
+	flags.ElementType_I:       "*int",
+	flags.ElementType_U:       "uintptr",
 }
 
 // The map of types created by `typedef` in C code to Go types
+// ToDo: is it necessary?
+//
+//lint:ignore U1000 maybe will be used
 var builtInTypeDefs map[string]string = map[string]string{
 	"BOOL": "uint32",
 }
@@ -97,10 +102,11 @@ func (reader *WinMdReader) getType(sigType winmd.SigType) (Type, error) {
 		return Type{}, fmt.Errorf("no matching type definition for type was found: %w", err)
 	}
 
-	builtInType, found = builtInTypeDefs[typeDef.Name.String()]
-	if found {
-		return Type{Name: builtInType, IsBuiltIn: true}, nil
-	}
+	// ToDo: This should be used
+	// builtInType, found = builtInTypeDefs[typeDef.Name.String()]
+	// if found {
+	// 	return Type{Name: builtInType, IsBuiltIn: true}, nil
+	// }
 
 	retType := Type{Name: typeDef.Name.String(), Properties: make([]Property, 0)}
 	for i := typeDef.FieldList.Start; i < typeDef.FieldList.End; i++ {
@@ -128,7 +134,11 @@ func (reader *WinMdReader) getProperty(field winmd.Field) (Property, error) {
 		return Property{}, fmt.Errorf("could not determine property type: %w", err)
 	}
 
-	return Property{Name: field.Name.String(), Type: propertyType}, nil
+	return Property{
+		// Ensuring that first letter is upper since otherwise it won't be visible outside
+		Name: strings.ToUpper(field.Name.String()[:1]) + field.Name.String()[1:],
+		Type: propertyType,
+	}, nil
 }
 
 func (reader *WinMdReader) getTypeDef(sigType winmd.SigType) (winmd.TypeDef, error) {
@@ -205,15 +215,15 @@ func (reader *WinMdReader) getMethod(methodDef *winmd.MethodDef) Method {
 
 	for i := 0; i < len(methodSignature.Param); i++ {
 		methodParam := methodSignature.Param[i]
-		methodParamSignature := methodParam.Type.Value.(winmd.SigType)
+		methodParamSignature := methodParam.Type
 		paramType, err := reader.getType(methodParamSignature)
 		internal.PanicOnError(err)
 		method.Params = append(
 			method.Params,
 			Parameter{
-				Name:      methodParamListValues[0].Name.String(),
+				Name:      methodParamListValues[i].Name.String(),
 				Type:      paramType,
-				IsPointer: methodParam.Type.Kind == flags.ElementType_PTR,
+				IsPointer: paramType.IsPointer,
 			})
 	}
 
@@ -256,4 +266,6 @@ func findElementInTable[T any, TP winmd.Record[T]](table winmd.Table[T, TP], act
 			return element
 		}
 	}
+
+	return nil
 }
